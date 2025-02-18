@@ -1,0 +1,5 @@
+.mypy_cache
+temp
+myenv
+.python-version
+
