@@ -52,8 +52,47 @@ class VideoSummarizer:
 
     def __convert_to_text(self, sound_path: str, model_name="small") -> str:
         model = whisper.load_model(model_name, device="cpu")
-        result = model.transcribe(sound_path)
-        return result["text"]
+        
+        # 使用支持的参数进行转录
+        result = model.transcribe(
+            sound_path,
+            initial_prompt="请使用自然段落分隔文本。在主题改变时开始新的段落。",
+            language="en"  # 可以根据需要更改语言
+        )
+        
+        # 处理转录文本，添加段落分隔
+        text = result["text"]
+        
+        # 基于句号和主题变化添加段落
+        sentences = text.split(". ")
+        paragraphs = []
+        current_paragraph = []
+        
+        for sentence in sentences:
+            # 确保句子结尾有句号
+            if not sentence.endswith("."):
+                sentence += "."
+                
+            current_paragraph.append(sentence)
+            
+            # 当积累了足够的句子或遇到主题转换标记时，创建新段落
+            if len(current_paragraph) >= 3 or any(marker in sentence.lower() for marker in [
+                "chapter", "section", "part",  # 章节标记
+                "however", "nevertheless", "moreover",  # 转折词
+                "firstly", "secondly", "finally",  # 序列词
+                "in conclusion", "to summarize",  # 总结标记
+            ]):
+                paragraphs.append(" ".join(current_paragraph))
+                current_paragraph = []
+        
+        # 添加最后一个段落
+        if current_paragraph:
+            paragraphs.append(" ".join(current_paragraph))
+        
+        # 使用双换行符连接段落
+        formatted_text = "\n\n".join(paragraphs)
+        
+        return formatted_text
 
     def __ai_summarizer(self, text: str, model_name="deepseek-r1:1.5b") -> str:
         input_text = f"""你是一个擅长总结文字的助手，善于保留重要信息并以清晰的格式呈现。请帮我总结以下文字。要求：
@@ -110,14 +149,52 @@ class VideoSummarizer:
         sound_file_name="sound",
         stt_model="small",
         output_file="transcript.txt",
+        max_chars_per_file=100000  # 每个文件的最大字符数
     ) -> str:
         sound_path = self.__download_sound(sound_file_name)
         transcribed_text = self.__convert_to_text(sound_path, stt_model)
-
+        
+        # 如果文本超过最大长度，分割成多个文件
+        if len(transcribed_text) > max_chars_per_file:
+            parts = []
+            current_pos = 0
+            part_num = 1
+            
+            while current_pos < len(transcribed_text):
+                # 找到合适的分割点（段落结束）
+                end_pos = current_pos + max_chars_per_file
+                if end_pos < len(transcribed_text):
+                    # 向后查找段落结束
+                    end_pos = transcribed_text.rfind("\n\n", current_pos, end_pos)
+                    if end_pos == -1:  # 如果找不到段落结束，就找句号
+                        end_pos = transcribed_text.rfind(". ", current_pos, current_pos + max_chars_per_file) + 1
+                else:
+                    end_pos = len(transcribed_text)
+                
+                # 提取当前部分的文本
+                part_text = transcribed_text[current_pos:end_pos].strip()
+                
+                # 保存到文件
+                part_file = f"{output_file.rsplit('.', 1)[0]}_part{part_num}.txt"
+                try:
+                    with open(part_file, "w", encoding="utf-8") as file:
+                        file.write(part_text)
+                    print(f"转录文本已保存到 {part_file}")
+                    parts.append(part_file)
+                except Exception as e:
+                    print(f"保存错误: {e}")
+                
+                current_pos = end_pos
+                part_num += 1
+            
+            print(f"\n转录文本已分割成 {len(parts)} 个文件")
+            return transcribed_text
+        
+        # 如果文本没有超过最大长度，保存到单个文件
         try:
-            with open(output_file, "w") as file:
+            with open(output_file, "w", encoding="utf-8") as file:
                 file.write(transcribed_text)
-                print(f"转录文本已保存到 {output_file}")
+            print(f"转录文本已保存到 {output_file}")
         except Exception as e:
             print(f"保存错误: {e}")
 
